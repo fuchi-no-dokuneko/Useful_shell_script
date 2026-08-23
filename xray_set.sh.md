@@ -11,3 +11,4 @@ Sets local HTTP/HTTPS/SOCKS proxy environment variables.
 ## Notes
 
 - Targets `127.0.0.1` ports `10801` (HTTP/HTTPS) and `10800` (SOCKS).
+- Prints only a confirmation and does not echo proxy values.

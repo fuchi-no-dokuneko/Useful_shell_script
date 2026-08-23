@@ -51,3 +51,12 @@ private_temp_dir() {
   chmod 0700 "$directory"
   printf -v "$destination" '%s' "$directory"
 }
+
+private_redact() {
+  local secret="$1"
+  local text="${2:-}"
+  if [[ -n "$secret" ]]; then
+    text="${text//"$secret"/[REDACTED]}"
+  fi
+  printf '%s' "$text"
+}
