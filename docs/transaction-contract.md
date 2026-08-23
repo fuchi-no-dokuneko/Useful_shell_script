@@ -12,6 +12,8 @@ Set `SAFE_STATE_ROOT` to migrate the journal offline to another protected direct
 
 For deterministic failure testing, set `USEFUL_SHELL_FAIL_STAGE` to a documented stage name. The harness must use fixture commands and a temporary `SAFE_STATE_ROOT`; never inject failures on a production host.
 
+Integrated boundaries cover Proxmox offload/reload/clone, daily VM startup, quota rescan, cloned-host identity reset, Tailscale registration, and Codex SQLite tmpfs installation. Each script records the exact checkpoint and a direct recovery action before changing host state.
+
 ## Secret and report policy
 
 Use environment variables, standard input, or mode-0600 descriptor files for credentials. Do not put credentials in command arguments. The transaction logger records only the stage and executable basename. Scripts set `umask 077`; generated logs, temporary files, ACL reports, and recovery data must remain private.

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/safe-transaction.sh
+source "$SCRIPT_DIR/lib/safe-transaction.sh"
+
 # ==============================================================================
 # DAILY STARTUP CONTROLLER V7 (Multi-Net & Strict Audit)
 # ==============================================================================
@@ -40,6 +44,13 @@ NC='\033[0m'
 get_vm_status() { qm status $1 2>/dev/null | awk '{print $2}'; }
 get_vm_name() { grep "^name:" /etc/pve/qemu-server/$1.conf 2>/dev/null | awk '{print $2}'; }
 
+safe_begin "daily-vm-start"
+# This audit script has expected non-zero grep results; explicit mutation checks
+# and the EXIT trap preserve the transaction without treating those as failures.
+trap - ERR
+safe_checkpoint "preflight" "No VM state has changed; inspect the private configuration snapshot and rerun." || exit $?
+safe_snapshot_file /etc/pve/qemu-server qemu-configs.before
+
 # ==============================================================================
 # PHASE 1: SAFETY CHECKS
 # ==============================================================================
@@ -51,7 +62,12 @@ for vm in "${FORBIDDEN_VMS[@]}"; do
         else
             echo -e "${RED}WARNING: VM $vm is RUNNING.${NC}"
             read -p "Stop VM $vm? (y/n): " confirm
-            [[ "$confirm" =~ ^[Yy]$ ]] && qm stop $vm || exit 1
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                safe_checkpoint "forbidden-vm-stop-$vm" "Verify whether VM $vm is stopped before rerunning." || exit $?
+                safe_run "forbidden-vm-stop-$vm" qm stop "$vm" || exit $?
+            else
+                exit 1
+            fi
         fi
     fi
 done
@@ -63,12 +79,18 @@ echo -e "${GREEN}✅ Safety checks passed.${NC}"
 echo -e "\n${YELLOW}>> Phase 2: Infrastructure${NC}"
 if [ -f "/etc/pve/qemu-server/$CORE_VM.conf" ] && [ "$(get_vm_status $CORE_VM)" != "running" ]; then
     read -p "Start Core VM $CORE_VM? (y/n): " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] && qm start $CORE_VM
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        safe_checkpoint "core-vm-start" "Verify VM $CORE_VM state before continuing." || exit $?
+        safe_run "core-vm-start" qm start "$CORE_VM" || exit $?
+    fi
 fi
 
 if [ -f "/etc/pve/qemu-server/$DENY_VM.conf" ] && [ "$(get_vm_status $DENY_VM)" == "running" ]; then
     read -p "Stop Deny VM $DENY_VM? (y/n): " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] && qm stop $DENY_VM
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        safe_checkpoint "deny-vm-stop" "Verify VM $DENY_VM state before continuing." || exit $?
+        safe_run "deny-vm-stop" qm stop "$DENY_VM" || exit $?
+    fi
 fi
 echo -e "${GREEN}✅ Infrastructure ready.${NC}"
 
@@ -200,7 +222,8 @@ if [[ " ${EXCLUSIVE_VMS[*]} " =~ " ${TARGET_ID} " ]]; then
         echo -e "${ALERT} Missing Disks! Found $cur, Expected $req. ${NC}"
         read -p "Run Reload_VM$TARGET_ID.sh now? (y/n): " fix
         if [[ "$fix" =~ ^[Yy]$ ]]; then
-            bash "$HOME/pve-admin/vm_script/Reload_VM$TARGET_ID.sh"
+            safe_checkpoint "resource-reload-$TARGET_ID" "Inspect VM $TARGET_ID disk attachments and finish or reverse the reload script." || exit $?
+            safe_run "resource-reload-$TARGET_ID" bash "$HOME/pve-admin/vm_script/Reload_VM$TARGET_ID.sh" || exit $?
             cur=$(grep -c "^scsi[1-9]:" /etc/pve/qemu-server/$TARGET_ID.conf)
             [ "$cur" -lt "$req" ] && { echo "❌ Still failed."; exit 1; }
         else
@@ -221,7 +244,8 @@ if [ -n "${VLAN_GROUPS[$cur_tag]}" ]; then
     read -p "Switch VLAN? (Allowed: $opts) [Enter to keep]: " new_tag
     if [ -n "$new_tag" ]; then
         if [[ ",$opts," =~ ",$new_tag," ]]; then
-            qm set $TARGET_ID --net0 virtio,bridge=MAIN_br,firewall=1,tag=$new_tag
+            safe_checkpoint "vlan-switch-$TARGET_ID" "Restore net0 from qemu-configs.before or verify the selected VLAN." || exit $?
+            safe_run "vlan-switch-$TARGET_ID" qm set "$TARGET_ID" --net0 "virtio,bridge=MAIN_br,firewall=1,tag=$new_tag" || exit $?
         else
             echo -e "${ALERT} Denied. ${NC}"
         fi
@@ -229,4 +253,8 @@ if [ -n "${VLAN_GROUPS[$cur_tag]}" ]; then
 fi
 
 echo -e "\n${GREEN}>> Starting VM $TARGET_ID...${NC}"
-qm start $TARGET_ID
+safe_checkpoint "target-start-$TARGET_ID" "Verify VM $TARGET_ID state and start it only after resource and VLAN checks pass." || exit $?
+safe_run "target-start-$TARGET_ID" qm start "$TARGET_ID" || exit $?
+safe_checkpoint "verify" "Verify VM $TARGET_ID is running and inspect its configuration before rerunning." || exit $?
+[[ "$(get_vm_status "$TARGET_ID")" == "running" ]] || { echo "VM $TARGET_ID did not reach running state." >&2; exit 1; }
+safe_complete

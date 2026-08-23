@@ -50,6 +50,7 @@ safe_begin() {
   trap '_safe_transaction_error $? $LINENO' ERR
   trap '_safe_transaction_signal INT' INT
   trap '_safe_transaction_signal TERM' TERM
+  trap '_safe_transaction_exit $?' EXIT
   printf 'Transaction: %s\n' "$SAFE_TRANSACTION_DIR"
 }
 
@@ -68,6 +69,10 @@ safe_checkpoint() {
   printf '%s\n' "$recovery" >"$SAFE_TRANSACTION_DIR/recovery.txt"
   chmod 0600 "$SAFE_TRANSACTION_DIR/checkpoint" "$SAFE_TRANSACTION_DIR/recovery.txt"
   safe_event "checkpoint" "$name"
+  if [[ "${USEFUL_SHELL_FAIL_STAGE:-}" == "$name" ]]; then
+    printf 'Injected failure at stage: %s\n' "$name" >&2
+    return 97
+  fi
 }
 
 safe_snapshot_file() {
@@ -100,7 +105,16 @@ safe_complete() {
   safe_event "complete" "verified"
   printf 'COMPLETE\n' >"$SAFE_TRANSACTION_STATUS"
   SAFE_TRANSACTION_ACTIVE=0
-  trap - ERR INT TERM
+  trap - ERR INT TERM EXIT
+}
+
+safe_abort() {
+  local reason="${1:-stopped before verification}"
+  [[ "$SAFE_TRANSACTION_ACTIVE" -eq 1 ]] || return 0
+  safe_event "aborted" "$reason"
+  printf 'RECOVERABLE\n' >"$SAFE_TRANSACTION_STATUS"
+  SAFE_TRANSACTION_ACTIVE=0
+  trap - ERR INT TERM EXIT
 }
 
 _safe_transaction_error() {
@@ -111,6 +125,7 @@ _safe_transaction_error() {
     safe_event "failed" "exit=$code line=$line"
     printf 'RECOVERABLE\n' >"$SAFE_TRANSACTION_STATUS"
     printf 'ERROR: transaction stopped at a recoverable checkpoint: %s\n' "$SAFE_TRANSACTION_DIR" >&2
+    SAFE_TRANSACTION_ACTIVE=0
   fi
   exit "$code"
 }
@@ -122,4 +137,13 @@ _safe_transaction_signal() {
   printf 'Interrupted. Recovery evidence: %s\n' "$SAFE_TRANSACTION_DIR" >&2
   trap - "$signal"
   kill -s "$signal" "$$"
+}
+
+_safe_transaction_exit() {
+  local code="$1"
+  if [[ "$SAFE_TRANSACTION_ACTIVE" -eq 1 ]]; then
+    safe_event "exited" "exit=$code"
+    printf 'RECOVERABLE\n' >"$SAFE_TRANSACTION_STATUS"
+    SAFE_TRANSACTION_ACTIVE=0
+  fi
 }
