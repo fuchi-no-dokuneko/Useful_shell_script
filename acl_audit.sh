@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -u
 set -o pipefail
+set +x
+umask 077
 
 SCRIPT_NAME="$(basename "$0")"
 VERSION="1.1"
@@ -71,6 +73,9 @@ if [[ -z "${DEBUG_FILE}" ]]; then
   TS="$(date +%Y%m%d_%H%M%S)"
   DEBUG_FILE="/tmp/acl_audit_first_layer_${TS}.log"
 fi
+install -d -m 0700 -- "$(dirname "$DEBUG_FILE")"
+: >"$DEBUG_FILE"
+chmod 0600 -- "$DEBUG_FILE"
 
 for cmd in find getfacl stat awk sed sort; do
   command -v "$cmd" >/dev/null 2>&1 || {
