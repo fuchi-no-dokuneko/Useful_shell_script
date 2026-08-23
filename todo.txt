@@ -1,3 +1,3 @@
-繁中：交易與私密輸入 MVP 已完成；主機腳本整合及失敗測試待完成。
+繁中：本批交易、私密輸入、主機整合及失敗測試均完成。
 
-English: Transaction and private-input MVPs are complete; host integration and failure tests remain.
+English: Transaction, private-input, host integration, and failure-test work is complete for this batch.

@@ -102,7 +102,10 @@ trace ./acl_audit_user.sh "$temp_root/acl-root" --users nobody \
   >"$temp_root/acl-user-report.txt"
 grep -q 'nobody' "$temp_root/acl-user-report.txt"
 grep -q "$temp_root/acl-root/direct" "$temp_root/acl-user-audit.log"
+test "$(stat -c '%a' "$temp_root/acl-audit.log")" = "600"
+test "$(stat -c '%a' "$temp_root/acl-user-audit.log")" = "600"
 bash tests/run-transaction-tests
+bash tests/run-secret-tests
 
 # Trace the non-secret happy path so the shared transaction implementation is
 # represented in the generic Sonar coverage report.
