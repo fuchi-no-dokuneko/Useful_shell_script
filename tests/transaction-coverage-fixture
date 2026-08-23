@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../lib/safe-transaction.sh
+source "$repo_root/lib/safe-transaction.sh"
+
+safe_begin "coverage-fixture"
+safe_checkpoint "preflight" "Fixture only."
+safe_run "apply" true
+safe_checkpoint "verify" "Fixture only."
+safe_complete

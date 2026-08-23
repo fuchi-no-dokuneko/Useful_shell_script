@@ -102,6 +102,11 @@ trace ./acl_audit_user.sh "$temp_root/acl-root" --users nobody \
   >"$temp_root/acl-user-report.txt"
 grep -q 'nobody' "$temp_root/acl-user-report.txt"
 grep -q "$temp_root/acl-root/direct" "$temp_root/acl-user-audit.log"
+bash tests/run-transaction-tests
+
+# Trace the non-secret happy path so the shared transaction implementation is
+# represented in the generic Sonar coverage report.
+SAFE_STATE_ROOT="$temp_root/traced-transactions" trace ./tests/transaction-coverage-fixture
 
 mapfile -t source_files < <(git ls-files '*.sh' 'ltree')
 python3 .github/scripts/bash-trace-to-sonar.py \

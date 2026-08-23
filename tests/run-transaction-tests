@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+temp_root="$(mktemp -d)"
+
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+assert_mode() {
+  local expected="$1"
+  local path="$2"
+  [[ "$(stat -c '%a' "$path")" == "$expected" ]] ||
+    fail "$path mode is not $expected"
+}
+
+transaction_root="$temp_root/transactions"
+SAFE_STATE_ROOT="$transaction_root"
+# shellcheck source=../lib/safe-transaction.sh
+source "$repo_root/lib/safe-transaction.sh"
+
+safe_begin "happy-path"
+safe_checkpoint "preflight" "Nothing changed."
+safe_run "apply" true
+safe_checkpoint "verify" "Inspect fixture output."
+safe_complete
+happy_dir="$SAFE_TRANSACTION_DIR"
+[[ "$(<"$happy_dir/status")" == "COMPLETE" ]] || fail "happy transaction is incomplete"
+assert_mode 700 "$happy_dir"
+assert_mode 600 "$happy_dir/status"
+assert_mode 600 "$happy_dir/events.log"
+assert_mode 600 "$happy_dir/checkpoint"
+
+for stage in preflight apply verify; do
+  stage_root="$temp_root/failure-$stage"
+  if SAFE_STATE_ROOT="$stage_root" USEFUL_SHELL_FAIL_STAGE="$stage" \
+    bash -c 'set -Eeuo pipefail; source "$1"; safe_begin fixture; safe_checkpoint preflight; safe_checkpoint apply; safe_checkpoint verify; safe_complete' \
+    _ "$repo_root/lib/safe-transaction.sh" >"$temp_root/$stage.out" 2>&1; then
+    fail "injected stage $stage unexpectedly passed"
+  fi
+  status_file="$(find "$stage_root" -type f -name status -print -quit)"
+  [[ -n "$status_file" && "$(<"$status_file")" == "RECOVERABLE" ]] ||
+    fail "injected stage $stage has no recoverable status"
+  grep -Fq "$stage" "$(dirname "$status_file")/checkpoint" ||
+    fail "injected stage $stage has no named checkpoint"
+done
+
+lock_root="$temp_root/lock"
+ready="$temp_root/lock-ready"
+SAFE_STATE_ROOT="$lock_root" READY_FILE="$ready" \
+  bash -c 'set -Eeuo pipefail; source "$1"; safe_begin shared; : >"$READY_FILE"; sleep 2; safe_complete' \
+  _ "$repo_root/lib/safe-transaction.sh" >"$temp_root/holder.out" 2>&1 &
+holder_pid=$!
+for _ in {1..40}; do
+  [[ -e "$ready" ]] && break
+  sleep 0.05
+done
+[[ -e "$ready" ]] || fail "lock holder did not start"
+if SAFE_STATE_ROOT="$lock_root" bash -c 'source "$1"; safe_begin shared' \
+  _ "$repo_root/lib/safe-transaction.sh" >"$temp_root/contender.out" 2>&1; then
+  fail "concurrent transaction was not rejected"
+fi
+wait "$holder_pid"
+grep -Fq "another shared transaction is active" "$temp_root/contender.out" ||
+  fail "lock rejection was not explicit"
+
+rm -rf "$temp_root"
+printf 'Transaction tests passed.\n'
