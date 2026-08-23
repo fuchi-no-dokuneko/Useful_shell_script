@@ -1,0 +1,3 @@
+繁中：MVP 已提供交易鎖、檢查點及私密日誌；各主機腳本整合與失敗測試待完成。
+
+English: MVP provides transaction locks, checkpoints, and private journals; host-script integration and failure tests remain.

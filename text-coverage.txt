@@ -1,0 +1,3 @@
+safe-transaction: Real temporary directories and fixture commands; privileged host commands are not executed.
+host-integrations: Shell syntax and injected-stage fixtures; Proxmox, quota, identity, systemd, and package tools are simulated.
+secret-policy: Real process and filesystem inspection with synthetic secrets; no production credentials are read.
