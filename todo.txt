@@ -1,0 +1,3 @@
+繁中：本批交易、私密輸入、主機整合及失敗測試均完成。
+
+English: Transaction, private-input, host integration, and failure-test work is complete for this batch.

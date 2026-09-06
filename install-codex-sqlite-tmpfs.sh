@@ -4,6 +4,10 @@
 
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/safe-transaction.sh
+source "$SCRIPT_DIR/lib/safe-transaction.sh"
+
 BASE="/dev/shm/codex-sqlite"
 TMPFILES="/etc/tmpfiles.d/codex-sqlite-tmpfs.conf"
 PROFILE="/etc/profile.d/90-codex-sqlite-tmpfs.sh"
@@ -34,11 +38,19 @@ UID_MIN="$(
 
 [ ! -L "$BASE" ] || fail "$BASE is a symlink; refusing to use it."
 
+safe_begin "codex-sqlite-tmpfs"
+safe_checkpoint "preflight" "No managed files have changed; inspect the journal and rerun."
+safe_snapshot_file "$TMPFILES" tmpfiles.before
+safe_snapshot_file "$PROFILE" profile.before
+
+safe_checkpoint "base-directory" "Verify /dev/shm/codex-sqlite ownership and mode before rerunning."
 install -d -m 0755 -o root -g root -- "$BASE"
 
+safe_checkpoint "tmpfiles-config" "Restore tmpfiles.before, or verify the generated tmpfiles entries before rerunning."
 : > "$TMPFILES"
 printf 'd %s 0755 root root -\n' "$BASE" >> "$TMPFILES"
 
+safe_checkpoint "profile-config" "Restore profile.before, or verify the managed profile script before rerunning."
 cat > "$PROFILE" <<'PROFILE_EOF'
 # Managed by install-codex-sqlite-tmpfs.sh
 # Fallback for Codex started from login shells.
@@ -63,6 +75,7 @@ configure_user() {
   local home="$4"
   local sqlite_dir="$BASE/$uid"
 
+  safe_checkpoint "user-$uid" "Restore this user's timestamped config backup and verify its SQLite directory before rerunning."
   [ ! -L "$sqlite_dir" ] ||
     fail "$sqlite_dir is a symlink; refusing to use it."
 
@@ -147,7 +160,14 @@ done < <(getent passwd)
 chmod 0644 "$TMPFILES"
 chown root:root "$TMPFILES"
 
-systemd-tmpfiles --create "$TMPFILES"
+safe_checkpoint "tmpfiles-apply" "Run systemd-tmpfiles --create after validating the generated configuration."
+safe_run "tmpfiles-apply" systemd-tmpfiles --create "$TMPFILES"
+
+safe_checkpoint "verify" "Validate managed files and per-user directories, then rerun if any entry is incomplete."
+test -d "$BASE"
+test -f "$TMPFILES"
+test -f "$PROFILE"
+safe_complete
 
 info
 info "Done."

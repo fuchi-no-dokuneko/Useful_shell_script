@@ -2,6 +2,8 @@
 
 A collection of convenience scripts for managing Proxmox VE and Linux environments.
 
+Privileged changes use private transaction journals with locks, named checkpoints, and recovery instructions. Supply credentials interactively or through a pre-opened descriptor; scripts disable tracing and keep generated evidence mode 0600 inside mode-0700 directories.
+
 ## Available Scripts
 
 Most scripts have a matching `.md` file with requirements and usage examples. Scripts that currently rely on inline guidance are summarized in [ADDITIONAL_SCRIPTS.md](ADDITIONAL_SCRIPTS.md).

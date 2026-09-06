@@ -1,0 +1,3 @@
+safe-transaction: Real temporary journals, named failures, and concurrent locks; privileged host commands are not executed.
+host-integrations: Shell syntax and shared transaction boundaries tested; Proxmox, quota, identity, systemd, and package tools are not executed.
+secret-policy: Real process, trace, redaction, and filesystem checks with synthetic secrets; curl is mocked and no production credentials are read.

@@ -2,7 +2,7 @@ name: Coverage and SonarQube
 
 on:
   push:
-    branches: [main]
+    branches: [main, "tickets/**"]
   pull_request:
   workflow_dispatch:
 

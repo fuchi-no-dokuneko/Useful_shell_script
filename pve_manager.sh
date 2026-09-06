@@ -1,12 +1,15 @@
 #!/bin/bash
+set -Euo pipefail
 
 # ==============================================================================
 # PVE ADMIN MANAGER
 # Wraps existing scripts for VM 100, 102, 103 and handles VM 200 Cloning.
 # ==============================================================================
 
-# Script Directory (Assume scripts are in ./vm_script relative to this file)
-SCRIPT_DIR="$(dirname "$0")/vm_script"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$ROOT_DIR/vm_script"
+# shellcheck source=lib/safe-transaction.sh
+source "$ROOT_DIR/lib/safe-transaction.sh"
 
 # Helper Function: Pause for user
 pause() {
@@ -21,12 +24,17 @@ run_script() {
     if [ -f "$full_path" ]; then
         echo ">> Executing: $script_name"
         # We call bash explicitly to run it
-        bash "$full_path"
+        if [[ "$SAFE_TRANSACTION_ACTIVE" -eq 1 ]]; then
+            safe_run "script-$script_name" bash "$full_path"
+        else
+            bash "$full_path"
+        fi
         if [ $? -eq 0 ]; then
             echo "✅ $script_name completed successfully."
         else
             echo "❌ $script_name FAILED."
             read -p "Press [Enter] to acknowledge error and continue..."
+            return 1
         fi
     else
         echo "❌ Error: Script not found at $full_path"
@@ -43,11 +51,13 @@ do_offload() {
     echo "=========================================="
     echo "This will STOP VMs 100, 102, 103 and mount drives to /mnt/."
     echo ""
+    safe_begin "pve-offload"
     
     # 1. VM 100 (Windows)
     read -p "Step 1/3: Stop VM 100 and Mount Drives? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Unload_VM100.sh"
+        safe_checkpoint "vm-100-offload" "Inspect VM 100 attachment state and either finish or reverse its unload script."
+        run_script "Unload_VM100.sh" || { safe_abort "VM 100 offload failed"; pause; return; }
     else
         echo "Skipping VM 100."
     fi
@@ -56,7 +66,8 @@ do_offload() {
     # 2. VM 102 (Passthrough)
     read -p "Step 2/3: Stop VM 102 and Mount Drives? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Unload_VM102.sh"
+        safe_checkpoint "vm-102-offload" "Inspect VM 102 attachment state and either finish or reverse its unload script."
+        run_script "Unload_VM102.sh" || { safe_abort "VM 102 offload failed"; pause; return; }
     else
         echo "Skipping VM 102."
     fi
@@ -65,12 +76,14 @@ do_offload() {
     # 3. VM 103 (Ubuntu)
     read -p "Step 3/3: Stop VM 103 and Mount Drives? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Unload_VM103.sh"
+        safe_checkpoint "vm-103-offload" "Inspect VM 103 attachment state and either finish or reverse its unload script."
+        run_script "Unload_VM103.sh" || { safe_abort "VM 103 offload failed"; pause; return; }
     else
         echo "Skipping VM 103."
     fi
 
     echo ""
+    safe_complete
     echo "✅ Offload sequence finished."
     pause
 }
@@ -85,11 +98,13 @@ do_reload() {
     echo "=========================================="
     echo "This will unmount drives from Host and re-attach to VMs."
     echo ""
+    safe_begin "pve-reload"
 
     # 1. VM 100
     read -p "Step 1/3: Reload VM 100? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Reload_VM100.sh"
+        safe_checkpoint "vm-100-reload" "Inspect VM 100 attachment state and finish or reverse its reload script."
+        run_script "Reload_VM100.sh" || { safe_abort "VM 100 reload failed"; pause; return; }
     else
         echo "Skipping VM 100."
     fi
@@ -98,7 +113,8 @@ do_reload() {
     # 2. VM 102
     read -p "Step 2/3: Reload VM 102? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Reload_VM102.sh"
+        safe_checkpoint "vm-102-reload" "Inspect VM 102 attachment state and finish or reverse its reload script."
+        run_script "Reload_VM102.sh" || { safe_abort "VM 102 reload failed"; pause; return; }
     else
         echo "Skipping VM 102."
     fi
@@ -107,12 +123,14 @@ do_reload() {
     # 3. VM 103
     read -p "Step 3/3: Reload VM 103? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        run_script "Reload_VM103.sh"
+        safe_checkpoint "vm-103-reload" "Inspect VM 103 attachment state and finish or reverse its reload script."
+        run_script "Reload_VM103.sh" || { safe_abort "VM 103 reload failed"; pause; return; }
     else
         echo "Skipping VM 103."
     fi
 
     echo ""
+    safe_complete
     echo "✅ Reload sequence finished."
     pause
 }
@@ -188,11 +206,16 @@ do_clone_200() {
     fi
 
     # Execution
+    safe_begin "pve-clone-$NEW_ID"
+    safe_checkpoint "clone-preflight" "No clone command has run; verify the target ID remains unused and retry."
+    safe_snapshot_file "/etc/pve/qemu-server/$NEW_ID.conf" target-config.before
     echo ">> Cloning VM 200 to $NEW_ID..."
-    qm clone 200 $NEW_ID --name "$NEW_NAME" --storage vm-os $FULL_CLONE_FLAG
+    safe_checkpoint "clone-create" "Destroy the incomplete target VM or verify its disks and configuration before continuing."
+    safe_run "clone-create" qm clone 200 "$NEW_ID" --name "$NEW_NAME" --storage vm-os $FULL_CLONE_FLAG
     
     if [ $? -ne 0 ]; then
         echo "❌ Clone Failed."
+        safe_abort "clone command failed"
         pause
         return
     fi
@@ -200,7 +223,11 @@ do_clone_200() {
     echo ">> Updating Network Config (VLAN $VLAN_TAG on MAIN_br)..."
     # This command sets the Bridge to MAIN_br, sets the VLAN, 
     # and auto-generates a NEW MAC address because we are redefining net0.
-    qm set $NEW_ID --net0 virtio,bridge=MAIN_br,firewall=1,tag=$VLAN_TAG
+    safe_checkpoint "clone-network" "Verify the target VM net0 bridge and VLAN before starting it."
+    safe_run "clone-network" qm set "$NEW_ID" --net0 "virtio,bridge=MAIN_br,firewall=1,tag=$VLAN_TAG"
+    safe_checkpoint "clone-verify" "Confirm target configuration and remove the incomplete clone if verification fails."
+    qm config "$NEW_ID" >/dev/null
+    safe_complete
 
     echo ""
     echo "✅ VM $NEW_ID created successfully."

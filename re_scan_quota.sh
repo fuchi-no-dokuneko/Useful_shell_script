@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/safe-transaction.sh
+source "$SCRIPT_DIR/lib/safe-transaction.sh"
+
 HOST="$(hostname -f 2>/dev/null || hostname)"
 QUOTA_DISABLED=0
 
@@ -53,6 +57,8 @@ on_error() {
     quotaon -avug || true
   fi
 
+  safe_abort "quota rescan failed with exit $rc"
+
   exit "$rc"
 }
 
@@ -93,17 +99,28 @@ read -r -p "Second confirmation: type this hostname exactly [$HOST]: " CONFIRM2
   exit 3
 }
 
-snapshot "BEFORE quota and usage"
+safe_begin "quota-rescan"
+trap on_error ERR
+safe_checkpoint "preflight" "No quota state has changed; inspect the private preflight evidence and rerun."
+safe_snapshot_file /etc/fstab fstab.before
+snapshot "BEFORE quota and usage" | tee "$SAFE_TRANSACTION_DIR/quota-before.txt"
+chmod 0600 "$SAFE_TRANSACTION_DIR/quota-before.txt"
 
-run quotaoff -avug
+safe_checkpoint "quota-off" "Run quotaon -avug if quotas are disabled, then inspect the journal."
+safe_run "quota-off" quotaoff -avug
 QUOTA_DISABLED=1
 
-run quotacheck -avugm
+safe_checkpoint "quota-check" "Run quotaon -avug, validate quota files, then rerun the complete rescan."
+safe_run "quota-check" quotacheck -avugm
 
-run quotaon -avug
+safe_checkpoint "quota-on" "Verify quotaon -avugp and repair any filesystem still reporting quotas off."
+safe_run "quota-on" quotaon -avug
 QUOTA_DISABLED=0
 
-snapshot "AFTER quota and usage"
+safe_checkpoint "verify" "Compare quota-before.txt with the current quota state before rerunning."
+snapshot "AFTER quota and usage" | tee "$SAFE_TRANSACTION_DIR/quota-after.txt"
+chmod 0600 "$SAFE_TRANSACTION_DIR/quota-after.txt"
+safe_complete
 
 echo
 echo "Done."
